@@ -139,6 +139,7 @@
   }
   .slider-row { display: flex; flex-direction: column; gap: 4px; }
   .slider-row .vals { display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--ink-dim); }
+  .slider-ends { opacity: 0.55; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.06em; }
   input[type="range"] { width: 100%; accent-color: var(--phosphor-dim); }
   .toggle-row { display: flex; align-items: center; justify-content: space-between; }
   .toggle-row label { font-size: 0.75rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-dim); }
@@ -192,12 +193,14 @@
 
     <div id="soundControls" class="controls-panel" style="display:none">
       <div class="slider-row">
-        <div class="vals"><span class="label">Sensitivity</span></div>
+        <div class="vals"><span class="label">Sensitivity</span><span class="label" id="sensVal"></span></div>
         <input type="range" id="sensitivitySlider" min="0" max="1" step="0.01" value="0.5" />
+        <div class="vals slider-ends"><span>surer</span><span>quieter taps</span></div>
       </div>
       <div class="slider-row">
-        <div class="vals"><span class="label">Cooldown</span></div>
+        <div class="vals"><span class="label">Cooldown</span><span class="label" id="cooldownVal"></span></div>
         <input type="range" id="cooldownSlider" min="80" max="600" step="10" value="250" />
+        <div class="vals slider-ends"><span>fast work</span><span>no doubles</span></div>
       </div>
       <button id="btnRecalibrate">Recalibrate</button>
       <div class="toggle-row">
@@ -246,7 +249,10 @@
     <div class="label">Demonstrate the sound</div>
     <p class="note">Same spot, same force, each time. 3 minimum &mdash; keeps listening up to 5.</p>
     <div class="dots" id="tapDots"></div>
-    <button class="primary" id="btnCalDone" style="display:none" disabled>Done</button>
+    <div class="row">
+      <button id="btnCalRestart" style="display:none">Start over</button>
+      <button class="primary" id="btnCalDone" style="display:none" disabled>Done</button>
+    </div>
   </div>
 
   <div id="screen-check" class="screen center-screen">

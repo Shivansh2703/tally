@@ -46,7 +46,8 @@ None of this publishes anything. It's your machine on your own network.
 
 1. **Silence, 1.5 seconds** — it measures the room.
 2. **Tap 3 to 5 times** — same spot, same force. A dot fills per tap. Three is enough; it keeps
-   listening up to five.
+   listening up to five. Got a wrong sound in — a cough, a dropped tool? **Start over** wipes
+   the taps and lets you redo them without leaving the screen.
 3. **Consistency check** — if your taps were scattered it says so and offers a redo, rather than
    letting you find out later from a wrong count.
 4. **Room check, 5 seconds** — **don't tap during this one.** It listens to your room, reports how
@@ -57,6 +58,24 @@ None of this publishes anything. It's your machine on your own network.
 5. **Count.** Big number. It flashes each time it hears you.
 
 The sensitivity slider stays available. Five taps can't see a whole room — expect to tune it.
+
+**What the sliders actually do.** *Sensitivity* only controls the "was that a sound at all?"
+bar — how far above the room's background a sound must jump before the app even considers it.
+It never touches the matching: every candidate still has to sound like your calibrated tap.
+Missing quiet taps → raise it. Over-counting → lower it. *Cooldown* is the minimum gap between
+two counts, so one tap ringing off the bench can't score twice — and it caps your speed (at
+250 ms you can't count faster than 4 per second). Working faster than it counts → lower it.
+Each slider shows its current value and what it means.
+
+**Music.** On iPhone, opening the microphone normally pauses whatever you're listening to,
+because iOS treats it like a phone call — and with AirPods connected it can also silently
+switch recording to the AirPods' own microphone, which is on your head instead of at the
+bench. The app now asks iOS for the one session type that permits recording, and tries to
+re-acquire the phone's built-in mic when it's been handed a headset one. Honestly: iOS has
+historically ignored both requests from web pages, so whether your music survives — and which
+mic is actually used — can only be confirmed on the phone itself. The debug capture records
+the mic's name so you can check rather than guess. If music still pauses, that's the
+platform's ceiling, not a setting you missed.
 
 Undo, manual ±, and reset are there because an uncorrectable count is a count nobody trusts. The
 tally survives a page reload.
@@ -106,7 +125,7 @@ every sound it rejected, which is what turns "it miscounted" into something fixa
 npm test
 ```
 
-36 tests, Node's built-in runner, no framework and no dependencies. `detector.js` and `tally.js`
+Node's built-in runner, no framework and no dependencies — `npm test` prints the count. `detector.js` and `tally.js`
 are pure — no DOM, no Web Audio, no clock — which is what lets the whole thing be tested without
 a microphone.
 

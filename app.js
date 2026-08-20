@@ -32,6 +32,46 @@ export function micNeedsResume(audioCtxState) {
   return audioCtxState === 'suspended';
 }
 
+// Slider scales. The app asked people to move sliders it never explained; the owner had
+// to ask what they do. These render the honest mechanics, not marketing words.
+// Sensitivity drives ONLY the "was that a sound at all?" bar (see detector.js: the flux
+// threshold is median * (3.5 - 3*s)); it never touches matching. Cooldown is the minimum
+// gap between counts, which caps the counting rate.
+export function sensitivityLabel(s) {
+  const mult = 3.5 - 3 * s; // keep in step with detector.js's multiplier line
+  return `${Math.round(s * 100)}% · bar ${mult.toFixed(1)}× room`;
+}
+export function cooldownLabel(ms) {
+  const perSec = Math.round((1000 / ms) * 10) / 10;
+  return `${ms} ms · max ${perSec}/s`;
+}
+
+// iOS with AirPods connected prefers the Bluetooth hands-free profile for getUserMedia:
+// that kills the music AND switches input to the AirPods' own mic — which is on the
+// worker's head, not at the bench, so taps arrive attenuated and phone-calibrated
+// fingerprints stop matching. Pure chooser so it's testable: given the granted track's
+// label and the device list, return the deviceId to re-acquire with, or null to keep
+// what we were given.
+const BLUETOOTHISH = /airpods|bluetooth|hands-?free|headset|hfp|buds|wh-\d|wf-\d/i;
+const BUILTINISH = /built-?in|iphone|ipad|macbook|internal/i;
+export function pickBuiltInMic(grantedLabel, devices) {
+  if (!grantedLabel || !BLUETOOTHISH.test(grantedLabel)) return null;
+  const builtIn = devices.find(
+    (d) => d.kind === 'audioinput' && BUILTINISH.test(d.label || '') && !BLUETOOTHISH.test(d.label || ''),
+  );
+  return builtIn ? builtIn.deviceId : null;
+}
+
+// Start-over's teeth. The detector's decision is deferred (~100ms), so the sound of the
+// finger hitting the Start-over button itself can be mid-judgement when the click lands;
+// without flushing, that pending onset settles on a later feed and becomes example #1 of
+// the supposedly fresh set — a screen-tap seeded as the calibration sound. Found by
+// review, demonstrated against the real detector. Flush and discard, THEN empty.
+export function discardCapture(detector, examples) {
+  detector.flush(); // settles anything in flight; the return value belongs to the discarded set
+  examples.length = 0;
+}
+
 function defaultState() {
   return {
     count: 0,
@@ -196,10 +236,35 @@ export function initApp() {
   async function initMic() {
     if (micTrack) micTrack.stop();
     if (audioCtx && audioCtx.state !== 'closed') await audioCtx.close().catch(() => {});
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-    });
+    // Safari (16.4+) only; everywhere else navigator.audioSession is undefined and this
+    // is a no-op. 'play-and-record' is the session type meant for mic use — without it
+    // iOS treats the page's capture as a phone call, which stops the user's music.
+    // Whether music actually SURVIVES capture is up to iOS, not us; this is the most a
+    // web page can ask for.
+    try { if (navigator.audioSession) navigator.audioSession.type = 'play-and-record'; } catch {}
+    const AUDIO = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+    let stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO });
+    // If iOS handed us a Bluetooth headset mic, ask for the built-in one instead: the
+    // bench mic belongs at the bench, and leaving the AirPods out of the capture path
+    // keeps them on the high-quality music profile.
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const wantId = pickBuiltInMic(stream.getAudioTracks()[0]?.label, devices);
+      if (wantId) {
+        const better = await navigator.mediaDevices.getUserMedia({
+          audio: { ...AUDIO, deviceId: { exact: wantId } },
+        });
+        for (const t of stream.getAudioTracks()) t.stop();
+        stream = better;
+      }
+    } catch {
+      // keep the stream we were granted — a worse mic beats no mic
+    }
     micTrack = stream.getAudioTracks()[0];
+    // If the OS ended the track underneath us (seen when granting a second stream kills
+    // the first and the re-acquire then throws), fail LOUDLY into fallbackToTap instead
+    // of letting readSpectrum feed silence to a calibration that will "succeed" at 0.
+    if (!micTrack || micTrack.readyState !== 'live') throw new Error('mic track not live after acquisition');
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const source = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();
@@ -299,11 +364,24 @@ export function initApp() {
     }
     $('btnCalDone').style.display = 'none';
     $('btnCalDone').disabled = true;
+    $('btnCalRestart').style.display = 'none';
 
     const examples = [];
     let doneClicked = false;
     $('btnCalDone').onclick = () => { doneClicked = true; };
     const tapDetector = createDetector({ centroid: null, noiseFloor, sensitivity: 0.5, refractoryMs: 250 });
+    // One cough into the mic used to poison a calibration you could not abort — the only
+    // exit was to finish the flow and Recalibrate (owner, 2026-08-20). Start over wipes
+    // the captured examples and keeps going; the noise floor is NOT re-measured (same
+    // room, seconds later — speed is the point of the button).
+    $('btnCalRestart').onclick = () => {
+      discardCapture(tapDetector, examples);
+      doneClicked = false;
+      for (const d of dots) d.classList.remove('filled');
+      $('btnCalDone').style.display = 'none';
+      $('btnCalDone').disabled = true;
+      $('btnCalRestart').style.display = 'none';
+    };
     await new Promise((resolve) => {
       function tick() {
         const spec = readSpectrum();
@@ -314,6 +392,7 @@ export function initApp() {
           // happened to be current when the decision surfaced, not the sound.
           examples.push(result.fingerprint);
           dots[examples.length - 1].classList.add('filled');
+          $('btnCalRestart').style.display = '';
         }
         const step = calibrationStep(examples.length, doneClicked);
         if (step.canFinish) {
@@ -410,14 +489,21 @@ export function initApp() {
     });
     $('sensitivitySlider').value = soundSettings.sensitivity;
     $('cooldownSlider').value = soundSettings.cooldownMs;
+    const paintSliderLabels = () => {
+      $('sensVal').textContent = sensitivityLabel(soundSettings.sensitivity);
+      $('cooldownVal').textContent = cooldownLabel(soundSettings.cooldownMs);
+    };
+    paintSliderLabels();
     $('sensitivitySlider').oninput = (e) => {
       soundSettings.sensitivity = parseFloat(e.target.value);
       detector.setSensitivity(soundSettings.sensitivity);
+      paintSliderLabels();
       persist();
     };
     $('cooldownSlider').oninput = (e) => {
       soundSettings.cooldownMs = parseInt(e.target.value, 10);
       detector.setRefractory(soundSettings.cooldownMs);
+      paintSliderLabels();
       persist();
     };
 
@@ -479,6 +565,7 @@ export function initApp() {
     const blob = new Blob([JSON.stringify({
       capturedAt: new Date().toISOString(),
       matchThreshold: cal.matchThreshold,
+      micLabel: micTrack?.label || 'unknown',
       noiseFloor: state.noiseFloor,
       sensitivity: state.settings.sound.sensitivity,
       cooldownMs: state.settings.sound.cooldownMs,

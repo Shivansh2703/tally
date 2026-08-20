@@ -100,13 +100,24 @@ if (err) console.log('soundError:', err);
 await evaluate(`document.getElementById('btnCalibrateStart').click()`);
 
 let last = '';
+let restarted = false;
 const deadline = Date.now() + 90000;
 while (Date.now() < deadline) {
   const s = await screen();
   if (s !== last) { console.log('  screen ->', s); last = s; }
   if (s === 'screen-tap') {
     const dots = await evaluate(`document.querySelectorAll('#tapDots .dot.filled').length`);
-    if (dots >= 3) await evaluate(`document.getElementById('btnCalDone').offsetParent && document.getElementById('btnCalDone').click()`);
+    // Exercise Start over exactly once, mid-capture: dots must drop to zero and the
+    // flow must still complete and count. Real-browser evidence for the button.
+    if (!restarted && dots >= 1) {
+      await evaluate(`document.getElementById('btnCalRestart').click()`);
+      const after = await evaluate(`document.querySelectorAll('#tapDots .dot.filled').length`);
+      const doneHidden = await evaluate(`document.getElementById('btnCalDone').offsetParent === null`);
+      console.log(`  start-over: dots ${dots} -> ${after}, Done hidden: ${doneHidden}`);
+      if (after !== 0 || !doneHidden) throw new Error('start-over did not reset the calibration capture');
+      restarted = true;
+    }
+    if (restarted && dots >= 3) await evaluate(`document.getElementById('btnCalDone').offsetParent && document.getElementById('btnCalDone').click()`);
   }
   if (s === 'screen-check') {
     console.log('    ', await evaluate(`document.getElementById('checkTitle').textContent + ' | ' + document.getElementById('checkDetail').textContent`));

@@ -83,3 +83,74 @@ test('isValidCalibration: malformed shapes are rejected, not thrown on', () => {
     'negatives not an array'
   );
 });
+
+// --- slider scales + mic routing (2026-08-20 second batch) ------------------
+
+import { sensitivityLabel, cooldownLabel, pickBuiltInMic } from './app.js';
+
+test('sensitivityLabel renders the percentage and the real flux multiplier', () => {
+  assert.equal(sensitivityLabel(0.5), '50% · bar 2.0× room');
+  assert.equal(sensitivityLabel(0), '0% · bar 3.5× room');
+  assert.equal(sensitivityLabel(1), '100% · bar 0.5× room');
+});
+
+test('cooldownLabel renders ms and the counting-rate ceiling it implies', () => {
+  assert.equal(cooldownLabel(250), '250 ms · max 4/s');
+  assert.equal(cooldownLabel(80), '80 ms · max 12.5/s');
+  assert.equal(cooldownLabel(600), '600 ms · max 1.7/s');
+});
+
+test('pickBuiltInMic: Bluetooth grant with a built-in available -> picks the built-in', () => {
+  const devices = [
+    { kind: 'audioinput', label: 'AirPods Pro', deviceId: 'bt-1' },
+    { kind: 'audioinput', label: 'iPhone Microphone', deviceId: 'builtin-1' },
+    { kind: 'videoinput', label: 'Built-in Camera', deviceId: 'cam-1' },
+  ];
+  assert.equal(pickBuiltInMic('AirPods Pro', devices), 'builtin-1');
+});
+
+test('pickBuiltInMic: leaves a built-in or wired grant alone', () => {
+  const devices = [
+    { kind: 'audioinput', label: 'iPhone Microphone', deviceId: 'builtin-1' },
+    { kind: 'audioinput', label: 'AirPods Pro', deviceId: 'bt-1' },
+  ];
+  assert.equal(pickBuiltInMic('iPhone Microphone', devices), null);
+  assert.equal(pickBuiltInMic('External USB Mic', devices), null);
+});
+
+test('pickBuiltInMic: Bluetooth grant but no built-in to switch to -> keep what we have', () => {
+  const devices = [{ kind: 'audioinput', label: 'AirPods Pro', deviceId: 'bt-1' }];
+  assert.equal(pickBuiltInMic('AirPods Pro', devices), null);
+  // permission not yet granted: labels come back empty — must not switch blindly
+  assert.equal(pickBuiltInMic('AirPods Pro', [{ kind: 'audioinput', label: '', deviceId: 'x' }]), null);
+});
+
+// --- start-over vs the deferred decision (review-found race) ----------------
+
+import { discardCapture } from './app.js';
+import { createDetector } from './detector.js';
+
+test('discardCapture: an onset in flight at the click cannot become example #1 of the new set', () => {
+  const N = 512;
+  const base = () => new Float64Array(N).fill(0.001);
+  const clank = () => { const s = new Float64Array(N); for (let i = 1; i < N; i++) s[i] = 3 * Math.exp(-(N - i) / 60); return s; };
+  const detector = createDetector({ centroid: null, noiseFloor: 0, sensitivity: 0.5, refractoryMs: 250 });
+  let t = 0;
+  for (let i = 0; i < 60; i++) { detector.feed(base(), t); t += 16; }
+
+  const examples = [];
+  // the button-press sound: an onset the detector is still judging when the click lands
+  assert.equal(detector.feed(clank(), t), null, 'decision is deferred, nothing settled yet');
+  t += 16;
+
+  discardCapture(detector, examples); // the Start-over handler
+
+  // keep feeding — without the flush inside discardCapture, the pending onset settles
+  // here and pushes into the freshly-emptied array
+  for (let i = 0; i < 10; i++) {
+    const ev = detector.feed(base(), t);
+    if (ev) examples.push(ev.fingerprint);
+    t += 16;
+  }
+  assert.equal(examples.length, 0, 'the discarded onset must not leak into the new set');
+});
