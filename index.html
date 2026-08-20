@@ -200,6 +200,14 @@
         <input type="range" id="cooldownSlider" min="80" max="600" step="10" value="250" />
       </div>
       <button id="btnRecalibrate">Recalibrate</button>
+      <div class="toggle-row">
+        <label for="debugToggle">Debug capture</label>
+        <input type="checkbox" id="debugToggle" />
+      </div>
+      <div class="row" id="debugRow" style="display:none">
+        <span class="label" id="captureCount">0 events</span>
+        <button id="btnExportCapture" disabled>Export</button>
+      </div>
     </div>
 
     <div class="controls-panel">
@@ -251,8 +259,9 @@
   </div>
 
   <div id="screen-room" class="screen center-screen">
-    <div class="label">Listening to your room</div>
-    <p class="note">5 seconds &mdash; checking for sounds that could be mistaken for your tap.</p>
+    <div class="label">Don&rsquo;t tap &mdash; just let it listen</div>
+    <p class="note">5 seconds. It checks for background sounds that could be mistaken for your
+      tap, and learns them so it can ignore them. Tapping now teaches it the wrong thing.</p>
     <div class="countdown" id="roomCountdown">5</div>
   </div>
 

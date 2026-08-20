@@ -1,3 +1,4 @@
 .devcert.pem
 .devkey.pem
 node_modules/
+tools/fixtures/

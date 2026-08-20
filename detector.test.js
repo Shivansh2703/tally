@@ -17,6 +17,16 @@ function tapSpectrum(amplitude = 1) {
   return s;
 }
 
+// Same instantaneous SHAPE as a tap, but it keeps ringing instead of dying. This is the
+// sound the owner's ruling is about: single-frame matching cannot tell it from a tap at
+// all (their onset frames are byte-identical), only the decay separates them.
+function ringingImpostorFrames(amplitude = 1) {
+  return [
+    tapSpectrum(amplitude), tapSpectrum(amplitude * 0.9), tapSpectrum(amplitude * 0.8),
+    baselineSpectrum(), baselineSpectrum(), baselineSpectrum(), baselineSpectrum(),
+  ];
+}
+
 // a clearly different shape: energy weighted toward high bins.
 function clankSpectrum(amplitude = 1) {
   const s = new Float64Array(N);
@@ -35,8 +45,43 @@ function warmUp(detector, count = 60, stepMs = 16) {
   return t;
 }
 
+// The detector now judges an onset by how it DECAYS, so it holds the onset and settles
+// a few frames later. Two consequences every test below has to respect:
+//   1. the event does not come back from the feed() that saw the impulse — count the
+//      return value of EVERY feed, not just that one.
+//   2. calibration examples must come off the detector itself. Hand-building them with
+//      the single-frame fingerprint() produces a 16-dim centroid that a 48-dim live
+//      fingerprint cannot be compared against.
+
+// One impulse plus the quiet frames it decays into: what a single tap looks like.
+function impulseFrames(spectrumFn, amp) {
+  return [spectrumFn(amp), baselineSpectrum(), baselineSpectrum(), baselineSpectrum(), baselineSpectrum()];
+}
+
+// Feed a whole impulse group, returning how many events came back across all of it.
+function feedImpulse(detector, spectrumFn, amp, startMs, stepMs = 16) {
+  let counted = 0;
+  let t = startMs;
+  for (const spec of impulseFrames(spectrumFn, amp)) {
+    if (detector.feed(spec, t)) counted++;
+    t += stepMs;
+  }
+  return { counted, t };
+}
+
 function calibrateFromShape(spectrumFn, jitters = [1, 1.02, 0.98, 1.01, 0.99]) {
-  const examples = jitters.map((j) => fingerprint(spectrumFn(j)));
+  const capture = createDetector({ centroid: null, noiseFloor: 0, sensitivity: 0.5, refractoryMs: 120 });
+  let t = warmUp(capture);
+  const examples = [];
+  for (const j of jitters) {
+    for (const spec of impulseFrames(spectrumFn, j)) {
+      const ev = capture.feed(spec, t);
+      if (ev) examples.push(ev.fingerprint);
+      t += 16;
+    }
+    t += 300;
+  }
+  assert.equal(examples.length, jitters.length, 'calibration capture should see every impulse');
   return calibrate(examples);
 }
 
@@ -50,13 +95,9 @@ test('exact count: N well-spaced matching impulses produce exactly N events', ()
   const impulses = 5;
 
   for (let i = 0; i < impulses; i++) {
-    detector.feed(baselineSpectrum(), t);
-    t += 16;
-    const result = detector.feed(tapSpectrum(1), t);
-    if (result) counted++;
-    t += 16;
-    detector.feed(baselineSpectrum(), t);
-    t += spacingMs;
+    const r = feedImpulse(detector, tapSpectrum, 1, t);
+    counted += r.counted;
+    t = r.t + spacingMs;
   }
 
   assert.equal(counted, impulses);
@@ -70,18 +111,12 @@ test('refractory: two impulses closer than refractory period count once', () => 
   let t = warmUp(detector);
   let counted = 0;
 
-  detector.feed(baselineSpectrum(), t);
-  t += 16;
-  if (detector.feed(tapSpectrum(1), t)) counted++;
-  t += 16;
-  detector.feed(baselineSpectrum(), t);
-  t += 40; // well inside the 120ms refractory window
+  const first = feedImpulse(detector, tapSpectrum, 1, t);
+  counted += first.counted;
+  t = first.t + 20; // second impulse lands well inside the 120ms refractory window
 
-  detector.feed(baselineSpectrum(), t);
-  t += 16;
-  if (detector.feed(tapSpectrum(1), t)) counted++;
-  t += 16;
-  detector.feed(baselineSpectrum(), t);
+  const second = feedImpulse(detector, tapSpectrum, 1, t);
+  counted += second.counted;
 
   assert.equal(counted, 1);
 });
@@ -95,13 +130,9 @@ test('wrong sound rejected even with flux well above threshold', () => {
   const spacingMs = 300;
 
   for (let i = 0; i < 5; i++) {
-    detector.feed(baselineSpectrum(), t);
-    t += 16;
-    const result = detector.feed(clankSpectrum(3), t); // loud, wrong shape
-    if (result) counted++;
-    t += 16;
-    detector.feed(baselineSpectrum(), t);
-    t += spacingMs;
+    const r = feedImpulse(detector, clankSpectrum, 3, t); // loud, wrong shape
+    counted += r.counted;
+    t = r.t + spacingMs;
   }
 
   assert.equal(counted, 0);
@@ -125,23 +156,20 @@ test('steady loud noise produces zero counts (flux stays near zero)', () => {
 
 test('a rejected sound does not blind the detector to a real tap shortly after', () => {
   const { centroid, matchThreshold } = calibrateFromShape(tapSpectrum);
-  const detector = createDetector({ centroid, matchThreshold, noiseFloor: 0, sensitivity: 0.5, refractoryMs: 120 });
+  // A long refractory, so that if a REJECTED sound wrongly armed it, the real tap that
+  // follows would be swallowed and this test fails. That is the whole point of it.
+  const refractoryMs = 300;
+  const detector = createDetector({ centroid, matchThreshold, noiseFloor: 0, sensitivity: 0.5, refractoryMs });
 
   let t = warmUp(detector);
 
-  detector.feed(baselineSpectrum(), t);
-  t += 16;
-  const rejected = detector.feed(clankSpectrum(3), t); // loud, non-matching
-  t += 16;
-  detector.feed(baselineSpectrum(), t);
-  t += 50; // shortly after, well inside what a naive refractory-on-rejection would have blocked
+  const junk = feedImpulse(detector, clankSpectrum, 3, t); // loud, non-matching
+  t = junk.t + 40; // past the decision window, still far inside the 300ms refractory
 
-  detector.feed(baselineSpectrum(), t);
-  t += 16;
-  const counted = detector.feed(tapSpectrum(1), t); // the real tap
+  const real = feedImpulse(detector, tapSpectrum, 1, t); // the real tap
 
-  assert.equal(rejected, null);
-  assert.notEqual(counted, null);
+  assert.equal(junk.counted, 0, 'the non-matching sound must not count');
+  assert.equal(real.counted, 1, 'a rejected sound must not arm the refractory against a real tap');
 });
 
 test('calibrate clamps matchThreshold for a pathologically tight example set', () => {
@@ -196,13 +224,9 @@ test('loud room: high steady noise bed does not bury real taps (guards Math.max,
   let counted = 0;
   const impulses = 5;
   for (let i = 0; i < impulses; i++) {
-    detector.feed(baselineSpectrum(), t);
-    t += 16;
-    const result = detector.feed(tapSpectrum(1), t);
-    if (result) counted++;
-    t += 16;
-    detector.feed(baselineSpectrum(), t);
-    t += 300;
+    const r = feedImpulse(detector, tapSpectrum, 1, t);
+    counted += r.counted;
+    t = r.t + 300;
   }
 
   assert.equal(counted, impulses, `expected all ${impulses} taps counted, got ${counted}`);
@@ -230,13 +254,9 @@ test('centroid-less detector counts matching impulses on flux+refractory alone',
 
   assert.doesNotThrow(() => {
     for (let i = 0; i < impulses; i++) {
-      detector.feed(baselineSpectrum(), t);
-      t += 16;
-      const result = detector.feed(tapSpectrum(1), t);
-      if (result) counted++;
-      t += 16;
-      detector.feed(baselineSpectrum(), t);
-      t += spacingMs;
+      const r = feedImpulse(detector, tapSpectrum, 1, t);
+      counted += r.counted;
+      t = r.t + spacingMs;
     }
   });
 
@@ -302,4 +322,211 @@ test('mixed sequence of bumps and undos ends where hand-calculation says', () =>
   ({ count, history } = applyUndo(count, history)); // undo the -1 -> 1
   assert.equal(count, 1);
   assert.deepEqual(history, [1, 1, -1]);
+});
+
+// --- listening to the TYPE of noise, not just its level --------------------
+// Owner ruling 2026-08-20: "It needs to listen to the type of noise". These fail if the
+// fingerprint ever goes back to a single frame.
+
+// Drive an arbitrary frame sequence through a detector and return every event it yielded.
+function feedFrames(detector, frames, startMs = 0, stepMs = 16) {
+  const events = [];
+  let t = startMs;
+  for (const spec of frames) {
+    const ev = detector.feed(spec, t);
+    if (ev) events.push(ev);
+    t += stepMs;
+  }
+  return { events, t };
+}
+
+function captureFingerprint(frames) {
+  const capture = createDetector({ centroid: null, noiseFloor: 0, sensitivity: 0.5, refractoryMs: 120 });
+  const t = warmUp(capture);
+  const { events } = feedFrames(capture, frames, t);
+  assert.ok(events.length > 0, 'expected the capture detector to see an onset');
+  return events[0].fingerprint;
+}
+
+const padded = (...frames) => [
+  ...frames, baselineSpectrum(), baselineSpectrum(), baselineSpectrum(),
+  baselineSpectrum(), baselineSpectrum(), baselineSpectrum(),
+];
+
+test('a sound that is identical for one frame but rings on instead of dying is rejected', () => {
+  // The premise, asserted rather than assumed: to a single-frame fingerprint these two
+  // sounds are the SAME sound. Nothing about the onset moment separates them.
+  assert.ok(
+    cosineDistance(fingerprint(tapSpectrum(1)), fingerprint(ringingImpostorFrames(1)[0])) < 1e-12,
+    'the impostor must be indistinguishable from a tap in a single frame, or this test proves nothing',
+  );
+
+  const { centroid, matchThreshold } = calibrateFromShape(tapSpectrum);
+  const detector = createDetector({ centroid, matchThreshold, noiseFloor: 0, sensitivity: 0.5, refractoryMs: 120 });
+  let t = warmUp(detector);
+
+  const real = feedFrames(detector, padded(tapSpectrum(1)), t);
+  t = real.t + 300;
+  const impostor = feedFrames(detector, ringingImpostorFrames(1), t);
+
+  assert.equal(real.events.length, 1, 'the real tap must still count');
+  assert.equal(impostor.events.length, 0, 'the ringing impostor must not count');
+});
+
+test('onset alignment: a tap peaking one frame late fingerprints the same as one on the boundary', () => {
+  // Load-bearing. The analyser hop never lines up with the onset the same way twice; without
+  // aligning to the loudest frame the multi-frame fingerprint scatters so badly it scores
+  // WORSE than the single-frame one it replaces.
+  // The lead frame is deliberately loud enough NOT to trip the restart rule — otherwise
+  // the restart re-anchors the onset for us and this test passes without alignment
+  // existing at all. (It did, until the negative control caught it.)
+  const onBoundary = captureFingerprint(padded(tapSpectrum(1)));
+  const oneFrameLate = captureFingerprint(padded(tapSpectrum(0.5), tapSpectrum(1)));
+  const { matchThreshold } = calibrateFromShape(tapSpectrum);
+  const d = cosineDistance(onBoundary, oneFrameLate);
+  assert.ok(d < matchThreshold, `misaligned tap should still match (distance ${d}, threshold ${matchThreshold})`);
+});
+
+// --- negative examples: what the room told us to ignore ---------------------
+
+test('a stored negative rejects a sound that would otherwise have counted', () => {
+  const { centroid, matchThreshold } = calibrateFromShape(tapSpectrum);
+  const mildRing = padded(tapSpectrum(1), tapSpectrum(0.4));
+  const mildRingFp = captureFingerprint(mildRing);
+
+  // Without negatives it counts — it is inside the match threshold.
+  const permissive = createDetector({ centroid, matchThreshold, noiseFloor: 0, sensitivity: 0.5, refractoryMs: 120 });
+  let t = warmUp(permissive);
+  assert.equal(feedFrames(permissive, mildRing, t).events.length, 1, 'precondition: this sound counts when nothing says to ignore it');
+
+  // Told to ignore it, it stops counting — and real taps still do.
+  const informed = createDetector({
+    centroid, matchThreshold, negatives: [mildRingFp], noiseFloor: 0, sensitivity: 0.5, refractoryMs: 120,
+  });
+  t = warmUp(informed);
+  const ignored = feedFrames(informed, mildRing, t);
+  const real = feedFrames(informed, padded(tapSpectrum(1)), ignored.t + 300);
+  assert.equal(ignored.events.length, 0, 'a sound nearer a negative than the target must not count');
+  assert.equal(real.events.length, 1, 'the calibrated tap must still count');
+});
+
+test('a candidate negative that looks like the calibrated sound is discarded, not stored', () => {
+  // The failure this prevents: the worker taps during the room check, that tap is stored as
+  // a thing to ignore, and the app then ignores every tap. Counting stops dead.
+  const examples = [1, 1.02, 0.98, 1.01, 0.99].map((j) => captureFingerprint(padded(tapSpectrum(j))));
+  const poison = captureFingerprint(padded(tapSpectrum(1)));
+  const genuine = captureFingerprint(padded(tapSpectrum(1), tapSpectrum(0.9), tapSpectrum(0.8)));
+
+  const cal = calibrate(examples, [poison, genuine]);
+  assert.equal(cal.negatives.length, 1, 'exactly one of the two candidates should survive');
+  assert.ok(
+    cosineDistance(cal.negatives[0], genuine) < 1e-9,
+    'the survivor must be the genuinely different sound, not the tap',
+  );
+
+  // ...and counting still works with that calibration.
+  const detector = createDetector({
+    centroid: cal.centroid, matchThreshold: cal.matchThreshold, negatives: cal.negatives,
+    noiseFloor: 0, sensitivity: 0.5, refractoryMs: 120,
+  });
+  const t = warmUp(detector);
+  assert.equal(feedFrames(detector, padded(tapSpectrum(1)), t).events.length, 1, 'taps must still count');
+});
+
+test('every onset the detector JUDGES is reported through onEvent, counted or not — this is what feeds the room check and the debug capture', () => {
+  const { centroid, matchThreshold } = calibrateFromShape(tapSpectrum);
+  const seen = [];
+  const detector = createDetector({
+    centroid, matchThreshold, noiseFloor: 0, sensitivity: 0.5, refractoryMs: 120,
+    onEvent: (ev) => seen.push(ev),
+  });
+  let t = warmUp(detector);
+  t = feedFrames(detector, padded(tapSpectrum(1)), t).t + 300;
+  feedFrames(detector, padded(clankSpectrum(3)), t);
+
+  assert.equal(seen.length, 2, 'both the counted tap and the rejected clank should surface');
+  assert.deepEqual(seen.map((e) => e.matched), [true, false]);
+  assert.ok(seen.every((e) => e.fingerprint && e.frames?.length), 'each event carries the evidence needed to re-score it offline');
+});
+
+// --- what the deferred decision does at the edges ---------------------------
+// The decision lands a few frames after the onset. These lock down what happens to an
+// onset that is still in flight when something interrupts it. Found by review, not by me.
+
+test('a superseded onset is NOT reported as a negative — that is how the app would learn to ignore taps', () => {
+  // When a much louder sound arrives inside the decision window the detector restarts on
+  // it and drops the earlier onset. That dropped onset must stay silent: it was never
+  // judged, it is only a leading edge, and the room check turns every unmatched onEvent
+  // into a sound to IGNORE. Reporting it would let a fragment of a real tap become a
+  // negative example, and the app would then reject real taps.
+  const { centroid, matchThreshold } = calibrateFromShape(tapSpectrum);
+  const seen = [];
+  const detector = createDetector({
+    centroid, matchThreshold, noiseFloor: 0, sensitivity: 0.5, refractoryMs: 120,
+    onEvent: (ev) => seen.push(ev),
+  });
+  let t = warmUp(detector);
+
+  // a quiet onset, then a far louder one one frame later, inside the decision window
+  detector.feed(tapSpectrum(0.25), t); t += 16;
+  const { events } = feedFrames(detector, padded(tapSpectrum(2)), t);
+
+  assert.equal(seen.length, 1, 'only the judged onset may be reported');
+  assert.equal(events.length, 1, 'the louder sound is the one that counts');
+  assert.ok(seen[0].matched, 'and it counted');
+});
+
+test('flush settles an onset left in flight, so a mode switch cannot silently eat a tap', () => {
+  const { centroid, matchThreshold } = calibrateFromShape(tapSpectrum);
+  const detector = createDetector({ centroid, matchThreshold, noiseFloor: 0, sensitivity: 0.5, refractoryMs: 120 });
+  let t = warmUp(detector);
+
+  // A tap and part of its decay, then the caller stops feeding — mode switch, recalibrate,
+  // teardown. Without flush() this tap is dropped and never counted at all.
+  const onsetT = t;
+  assert.equal(detector.feed(tapSpectrum(1), t), null, 'the decision is deferred, so nothing yet');
+  t += 16;
+  detector.feed(baselineSpectrum(), t); t += 16;
+  detector.feed(baselineSpectrum(), t);
+
+  const flushed = detector.flush();
+  assert.notEqual(flushed, null, 'the in-flight tap must still be judged');
+  assert.equal(flushed.t, onsetT, 'and it carries its original onset time, not the flush time');
+  assert.equal(detector.flush(), null, 'flushing again is a safe no-op');
+});
+
+test('an onset with only one frame settles as a REJECT, never a spurious count', () => {
+  // Reachable whenever frames stop or stall: a phone throttling requestAnimationFrame, a
+  // backgrounded tab, or a flush the instant after an onset. With one frame there is no
+  // decay to read, so fingerprintFrames pads by repeating it and the flat signature fails
+  // to match. That is the SAFE direction — this app would rather miss than over-count —
+  // and it is reported through onEvent, so the debug capture can show it happening.
+  const { centroid, matchThreshold } = calibrateFromShape(tapSpectrum);
+  const seen = [];
+  const detector = createDetector({
+    centroid, matchThreshold, noiseFloor: 0, sensitivity: 0.5, refractoryMs: 120,
+    onEvent: (ev) => seen.push(ev),
+  });
+  const t = warmUp(detector);
+
+  detector.feed(tapSpectrum(1), t);
+  const flushed = detector.flush();
+
+  assert.equal(flushed, null, 'a one-frame onset must not count');
+  assert.equal(seen.length, 1, 'but it must still be reported, or the capture cannot explain the miss');
+  assert.equal(seen[0].matched, false);
+  assert.equal(seen[0].frames.length, 1);
+});
+
+test('cosineDistance throws on a length mismatch instead of returning NaN or a plausible wrong number', () => {
+  // The bug this guards: a 48-value fingerprint compared against a 16-value centroid used
+  // to return NaN, and NaN <= threshold is false, so the app counted NOTHING, silently.
+  // With the arguments the other way round it truncated and returned a small, believable
+  // distance — which would OVER-count, the failure this app most needs to avoid.
+  const short = fingerprint(tapSpectrum(1));
+  const long = captureFingerprint(padded(tapSpectrum(1)));
+  assert.equal(short.length, 16);
+  assert.equal(long.length, 48);
+  assert.throws(() => cosineDistance(long, short), /length mismatch/);
+  assert.throws(() => cosineDistance(short, long), /length mismatch/);
 });

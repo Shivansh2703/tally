@@ -2,7 +2,7 @@
 // calibration flow, persistence. DOM-touching code only runs from initApp(),
 // so this module can be imported under `node --test` to exercise the pure
 // logic below without a browser.
-import { fingerprint, calibrate, createDetector } from './detector.js';
+import { calibrate, createDetector, FINGERPRINT_DIM } from './detector.js';
 import { applyBump, applyUndo } from './tally.js';
 
 const STORAGE_KEY = 'tally-v1-state';
@@ -38,7 +38,7 @@ function defaultState() {
     history: [],
     mode: 'tap',
     settings: {
-      sound: { sensitivity: 0.5, cooldownMs: 250, tick: false },
+      sound: { sensitivity: 0.5, cooldownMs: 250, tick: false, debug: false },
       tap: { tick: false },
     },
     calibration: null,
@@ -46,16 +46,33 @@ function defaultState() {
   };
 }
 
+// The fingerprint dimension changed (16 -> 48, BANDS * FP_FRAMES) in the type-matching
+// upgrade. A calibration saved under the old shape is not wrong data to migrate, it's
+// data that means something different now — cosineDistance over mismatched-length
+// vectors is undefined behavior, and this app's whole point is no false positives. So
+// any shape mismatch discards the calibration wholesale, same as none was ever saved.
+export function isValidCalibration(cal, dim = FINGERPRINT_DIM) {
+  if (!cal || typeof cal !== 'object') return false;
+  if (!Array.isArray(cal.centroid) || cal.centroid.length !== dim) return false;
+  if (cal.negatives !== undefined) {
+    if (!Array.isArray(cal.negatives)) return false;
+    if (!cal.negatives.every((n) => Array.isArray(n) && n.length === dim)) return false;
+  }
+  return true;
+}
+
 function loadState() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
     if (!saved || typeof saved !== 'object') return defaultState();
     const d = defaultState();
-    return {
+    const state = {
       ...d,
       ...saved,
       settings: { ...d.settings, ...(saved.settings || {}) },
     };
+    if (state.calibration && !isValidCalibration(state.calibration)) state.calibration = null;
+    return state;
   } catch {
     return defaultState();
   }
@@ -89,6 +106,8 @@ export function initApp() {
     $('soundControls').style.display = state.mode === 'sound' ? '' : 'none';
     $('tapHint').style.display = state.mode === 'tap' ? '' : 'none';
     $('tickToggle').checked = !!state.settings[state.mode]?.tick;
+    $('debugToggle').checked = !!state.settings.sound.debug;
+    $('debugRow').style.display = state.settings.sound.debug ? '' : 'none';
   }
 
   function pulse() {
@@ -290,7 +309,10 @@ export function initApp() {
         const spec = readSpectrum();
         const result = tapDetector.feed(spec, performance.now());
         if (result) {
-          examples.push(fingerprint(spec));
+          // The event carries its own fingerprint, built from the frames the detector
+          // actually judged. Re-fingerprinting `spec` here would capture whatever frame
+          // happened to be current when the decision surfaced, not the sound.
+          examples.push(result.fingerprint);
           dots[examples.length - 1].classList.add('filled');
         }
         const step = calibrationStep(examples.length, doneClicked);
@@ -305,7 +327,7 @@ export function initApp() {
     });
 
     // 3. consistency check
-    const cal = calibrate(examples);
+    let cal = calibrate(examples);
     showScreen('screen-check');
     const SPREAD_BOUND = 0.25;
     if (cal.spread > SPREAD_BOUND) {
@@ -322,9 +344,19 @@ export function initApp() {
     $('btnCheckContinue').style.display = '';
     await new Promise((resolve) => { $('btnCheckContinue').onclick = resolve; });
 
-    // 4. room check — listen 5s
+    // 4. room check — listen 5s. It already existed to warn the worker that the room
+    // contains sounds like theirs; now it does a second job. Nobody is supposed to be
+    // tapping during it, so everything it REJECTS is a sound the room makes that we are
+    // not counting — exactly the negative examples the matcher needs. Nothing extra is
+    // asked of the worker. calibrate() throws away any candidate that looks like the
+    // calibrated sound, so a stray tap here cannot teach the app to ignore taps.
     showScreen('screen-room');
-    const roomDetector = createDetector({ centroid: cal.centroid, matchThreshold: cal.matchThreshold, noiseFloor, sensitivity: 0.5, refractoryMs: 120 });
+    const heardInRoom = [];
+    const roomDetector = createDetector({
+      centroid: cal.centroid, matchThreshold: cal.matchThreshold, noiseFloor,
+      sensitivity: 0.5, refractoryMs: 120,
+      onEvent: (ev) => { if (!ev.matched) heardInRoom.push(ev.fingerprint); },
+    });
     let roomMatches = 0;
     const roomStart = performance.now();
     await new Promise((resolve) => {
@@ -338,13 +370,25 @@ export function initApp() {
       }
       requestAnimationFrame(tick);
     });
+    cal = calibrate(examples, heardInRoom);
+
     showScreen('screen-room-report');
-    $('roomReport').textContent = roomMatches === 0
+    const learned = cal.negatives.length
+      ? ` Learned ${cal.negatives.length} background sound${cal.negatives.length === 1 ? '' : 's'} to ignore.`
+      : '';
+    $('roomReport').textContent = (roomMatches === 0
       ? 'Room is clear — nothing in the background sounded like your tap.'
-      : `Heard ${roomMatches} sound${roomMatches === 1 ? '' : 's'} in your room that looked like your tap. This will over-count. Consider a quieter spot or recalibrating.`;
+      : `Heard ${roomMatches} sound${roomMatches === 1 ? '' : 's'} in your room that looked like your tap. This will over-count. Consider a quieter spot or recalibrating.`) + learned;
     await new Promise((resolve) => { $('btnRoomContinue').onclick = resolve; });
 
-    state.calibration = cal;
+    // Plain arrays, not Float64Arrays: JSON.stringify turns a typed array into an
+    // object with numeric keys, which happens to still work but only by accident.
+    state.calibration = {
+      centroid: Array.from(cal.centroid),
+      matchThreshold: cal.matchThreshold,
+      spread: cal.spread,
+      negatives: cal.negatives.map((n) => Array.from(n)),
+    };
     state.noiseFloor = noiseFloor;
     persist();
     runDetectionLoop();
@@ -354,12 +398,15 @@ export function initApp() {
     showScreen('screen-main');
     const cal = state.calibration;
     const soundSettings = state.settings.sound;
+    let lastFrameT = 0;
     const detector = createDetector({
       centroid: cal.centroid,
       matchThreshold: cal.matchThreshold,
+      negatives: cal.negatives || [],
       noiseFloor: state.noiseFloor,
       sensitivity: soundSettings.sensitivity,
       refractoryMs: soundSettings.cooldownMs,
+      onEvent: (ev) => { if (soundSettings.debug) record(ev); },
     });
     $('sensitivitySlider').value = soundSettings.sensitivity;
     $('cooldownSlider').value = soundSettings.cooldownMs;
@@ -378,12 +425,72 @@ export function initApp() {
     function loop() {
       if (!running) return;
       const spec = readSpectrum();
-      if (detector.feed(spec, performance.now())) bump(1);
+      const now = performance.now();
+      frameDtMs = lastFrameT ? now - lastFrameT : 0;
+      lastFrameT = now;
+      if (detector.feed(spec, now)) bump(1);
       requestAnimationFrame(loop);
     }
     requestAnimationFrame(loop);
-    stopSoundLoop = () => { running = false; };
+    stopSoundLoop = () => {
+      running = false;
+      // The detector defers its decision, so a tap can be mid-judgement right now.
+      // Settle it instead of dropping it — otherwise switching modes or hitting
+      // Recalibrate an instant after a tap silently loses that count.
+      if (detector.flush()) bump(1);
+    };
   }
+
+  // --- debug capture ---------------------------------------------------------
+  // Every measurement in this repo so far comes from synthesized audio, and the
+  // synthesizer decides what a tap and a thud sound like. This is how a real bench
+  // gets a vote: record what the detector saw for every onset it COUNTED and every
+  // onset it REJECTED, export it, and replay it through tools/harness.mjs. A real
+  // recording then becomes a permanent fixture instead of an impression.
+  const CAPTURE_LIMIT = 300;
+  const capture = [];
+  let frameDtMs = 0;
+
+  function record(ev) {
+    const round = (arr) => Array.from(arr, (v) => +v.toFixed(6));
+    capture.push({
+      t: Math.round(ev.t),
+      matched: ev.matched,
+      distance: ev.distance,
+      flux: +ev.flux.toFixed(4),
+      threshold: +ev.threshold.toFixed(4),
+      dtMs: +frameDtMs.toFixed(2),
+      fingerprint: round(ev.fingerprint),
+      frames: ev.frames.map(round),
+    });
+    if (capture.length > CAPTURE_LIMIT) capture.shift();
+    $('captureCount').textContent = `${capture.length} event${capture.length === 1 ? '' : 's'}`;
+    $('btnExportCapture').disabled = false;
+  }
+
+  $('debugToggle').onchange = (e) => {
+    state.settings.sound.debug = e.target.checked;
+    $('debugRow').style.display = e.target.checked ? '' : 'none';
+    persist();
+  };
+
+  $('btnExportCapture').onclick = () => {
+    const cal = state.calibration || {};
+    const blob = new Blob([JSON.stringify({
+      capturedAt: new Date().toISOString(),
+      matchThreshold: cal.matchThreshold,
+      noiseFloor: state.noiseFloor,
+      sensitivity: state.settings.sound.sensitivity,
+      cooldownMs: state.settings.sound.cooldownMs,
+      negatives: cal.negatives || [],
+      events: capture,
+    })], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `tally-capture-${Date.now()}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
 
   // --- wake lock -------------------------------------------------------------
 
