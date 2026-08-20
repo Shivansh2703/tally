@@ -18,6 +18,20 @@ export function calibrationStep(count, doneClicked) {
   return { canFinish, finished };
 }
 
+// Owner report 2026-08-20: after recalibrating, "the mic doesn't pick
+// anything up." Root cause: unlike v0 (which unconditionally re-ran
+// initMic() — fresh getUserMedia + fresh AudioContext — at the top of every
+// calibration), the shell acquires the mic once ever (`if (!audioCtx)`) and
+// never rechecks it. A real device can suspend the AudioContext (background/
+// lock) or end the track (OS reclaims the mic) with nothing to detect or
+// repair it. Pure decisions so they're testable without a mic.
+export function micNeedsReacquire(audioCtxState, trackState) {
+  return !audioCtxState || audioCtxState === 'closed' || trackState === 'ended';
+}
+export function micNeedsResume(audioCtxState) {
+  return audioCtxState === 'suspended';
+}
+
 function defaultState() {
   return {
     count: 0,
@@ -157,13 +171,16 @@ export function initApp() {
 
   // --- sound mode: mic plumbing --------------------------------------------
 
-  let audioCtx, analyser, magBuf;
+  let audioCtx, analyser, magBuf, micTrack;
   const dbBuf = new Float32Array(512);
 
   async function initMic() {
+    if (micTrack) micTrack.stop();
+    if (audioCtx && audioCtx.state !== 'closed') await audioCtx.close().catch(() => {});
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
     });
+    micTrack = stream.getAudioTracks()[0];
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const source = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();
@@ -171,6 +188,17 @@ export function initApp() {
     analyser.smoothingTimeConstant = 0;
     source.connect(analyser);
     magBuf = new Float64Array(analyser.frequencyBinCount);
+  }
+
+  // Called before every entry into SOUND mode and before every calibration
+  // (including Recalibrate, which used to skip this check entirely — see
+  // micNeedsReacquire/micNeedsResume above).
+  async function ensureMicReady() {
+    if (micNeedsReacquire(audioCtx?.state, micTrack?.readyState)) {
+      await initMic();
+    } else if (micNeedsResume(audioCtx.state)) {
+      await audioCtx.resume();
+    }
   }
 
   function readSpectrum() {
@@ -188,7 +216,7 @@ export function initApp() {
   async function startSoundMode() {
     $('soundError').style.display = 'none';
     try {
-      if (!audioCtx) await initMic();
+      await ensureMicReady();
     } catch {
       fallbackToTap('Microphone access was denied or unavailable — using TAP mode instead.');
       return;
@@ -204,6 +232,18 @@ export function initApp() {
   $('btnRecalibrate').onclick = () => runCalibration();
 
   async function runCalibration() {
+    // Recalibrate is reachable straight from the counting screen, bypassing
+    // setMode()'s loop teardown — stop any live detection loop first so it
+    // doesn't keep bumping the count from a stale detector underneath the
+    // calibration screens.
+    if (stopSoundLoop) { stopSoundLoop(); stopSoundLoop = null; }
+    try {
+      await ensureMicReady();
+    } catch {
+      fallbackToTap('Microphone access was denied or unavailable — using TAP mode instead.');
+      return;
+    }
+
     // 1. noise floor (1.5s)
     showScreen('screen-noise');
     let noiseFluxSum = 0, noiseFrames = 0, prevFrame = null;

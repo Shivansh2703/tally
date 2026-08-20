@@ -94,4 +94,4 @@ a microphone.
 | `tally.js` | pure count arithmetic (bump/undo, clamped at zero) |
 | `detector.test.js` | all tests for both |
 
-Zero dependencies, no build step, no network. That's deliberate and it's a standing constraint.
+Zero dependencies, no build step, no network. That's deliberate.

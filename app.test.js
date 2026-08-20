@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { calibrationStep } from './app.js';
+import { calibrationStep, micNeedsReacquire, micNeedsResume } from './app.js';
 
 test('calibrationStep: fewer than 3 examples never finishes, Done not offered', () => {
   for (const n of [0, 1, 2]) {
@@ -26,4 +26,23 @@ test('calibrationStep: Done click at 3, 4 finishes on that click', () => {
 test('calibrationStep: 5 examples always finishes, Done or not', () => {
   assert.equal(calibrationStep(5, false).finished, true);
   assert.equal(calibrationStep(5, true).finished, true);
+});
+
+// --- recalibration mic-liveness bug (owner report 2026-08-20) --------------
+
+test('micNeedsReacquire: true with no context yet, a closed context, or an ended track', () => {
+  assert.equal(micNeedsReacquire(undefined, undefined), true);
+  assert.equal(micNeedsReacquire('closed', 'live'), true);
+  assert.equal(micNeedsReacquire('running', 'ended'), true);
+});
+
+test('micNeedsReacquire: false when the context is alive (running or suspended) and the track is live', () => {
+  assert.equal(micNeedsReacquire('running', 'live'), false);
+  assert.equal(micNeedsReacquire('suspended', 'live'), false);
+});
+
+test('micNeedsResume: true only for a suspended context, not running or closed', () => {
+  assert.equal(micNeedsResume('suspended'), true);
+  assert.equal(micNeedsResume('running'), false);
+  assert.equal(micNeedsResume('closed'), false);
 });
