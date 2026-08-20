@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Tally</title>
+<style>
+  :root {
+    color-scheme: light;
+    --face: #d7ddd0;
+    --face-2: #c9d0c1;
+    --ink: #16220f;
+    --ink-dim: #4a5a41;
+    --phosphor: #2fbf5f;
+    --phosphor-dim: #1f7f40;
+    --warn: #8c1c1c;
+    --line: #8a9280;
+  }
+  * { box-sizing: border-box; min-width: 0; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow-x: hidden;
+    background: var(--face);
+    color: var(--ink);
+    font-family: ui-monospace, "SF Mono", "Menlo", "Consolas", "Liberation Mono", monospace;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #app {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* mode switcher — always visible */
+  .modes {
+    display: flex;
+    border-bottom: 2px solid var(--ink);
+    background: var(--face-2);
+    flex: 0 0 auto;
+  }
+  .mode-btn {
+    flex: 1;
+    min-width: 0;
+    padding: 14px 2px;
+    font: inherit;
+    font-size: clamp(0.62rem, 3.2vw, 0.85rem);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    background: transparent;
+    border: none;
+    border-right: 1px solid var(--line);
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .mode-btn:last-child { border-right: none; }
+  .mode-btn.active {
+    color: var(--face);
+    background: var(--ink);
+  }
+
+  .screen { display: none; flex: 1; min-height: 0; flex-direction: column; }
+  .screen.active { display: flex; }
+
+  #screen-main {
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px 20px;
+    gap: 12px;
+  }
+
+  .readout {
+    flex: 1;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    touch-action: manipulation;
+  }
+  .count {
+    font-size: clamp(96px, 30vw, 190px);
+    line-height: 1;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--phosphor);
+    text-shadow: 0 0 12px rgba(47, 191, 95, 0.45);
+  }
+  .count.pulse { animation: pulse 160ms ease-out; }
+  @keyframes pulse { 0% { transform: scale(1.12); } 100% { transform: scale(1); } }
+  @media (prefers-reduced-motion: reduce) {
+    .count.pulse { animation: none; }
+  }
+
+  .label {
+    font-size: 0.7rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+  }
+
+  .row { display: flex; gap: 8px; align-items: stretch; justify-content: center; flex-wrap: wrap; width: 100%; }
+  .row button { flex: 1 1 64px; min-width: 0; }
+
+  button {
+    font: inherit;
+    font-size: 0.85rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 14px 8px;
+    min-height: 52px;
+    min-width: 0;
+    border-radius: 4px;
+    border: 2px solid var(--ink);
+    background: var(--face-2);
+    color: var(--ink);
+    cursor: pointer;
+  }
+  button:active { background: var(--ink); color: var(--face); }
+  button.primary { background: var(--phosphor-dim); color: var(--face); border-color: var(--ink); }
+  button.danger { background: var(--warn); color: var(--face); border-color: var(--ink); }
+  button:disabled { opacity: 0.4; cursor: default; }
+
+  .controls-panel {
+    width: 100%;
+    max-width: 480px;
+    border: 2px solid var(--ink);
+    border-radius: 4px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background: var(--face-2);
+  }
+  .slider-row { display: flex; flex-direction: column; gap: 4px; }
+  .slider-row .vals { display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--ink-dim); }
+  input[type="range"] { width: 100%; accent-color: var(--phosphor-dim); }
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; }
+  .toggle-row label { font-size: 0.75rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-dim); }
+  input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--phosphor-dim); }
+
+  .note {
+    font-size: 0.8rem;
+    color: var(--ink-dim);
+    max-width: 360px;
+    text-align: center;
+    line-height: 1.4;
+  }
+  .error-note { font-size: 0.8rem; color: var(--warn); max-width: 360px; text-align: center; }
+
+  .center-screen {
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 24px;
+    text-align: center;
+  }
+
+  .dots { display: flex; gap: 10px; }
+  .dot { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--ink); }
+  .dot.filled { background: var(--phosphor-dim); border-color: var(--ink); }
+
+  .countdown {
+    font-size: clamp(60px, 20vw, 110px);
+    font-variant-numeric: tabular-nums;
+    color: var(--phosphor);
+  }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div class="modes">
+    <button class="mode-btn" data-mode="tap">Tap</button>
+    <button class="mode-btn" data-mode="sound">Sound</button>
+    <button class="mode-btn" data-mode="motion">Motion</button>
+  </div>
+
+  <div id="screen-main" class="screen active">
+    <div class="readout" id="countDisplay-wrap">
+      <div class="count" id="countDisplay">0</div>
+    </div>
+
+    <div id="tapHint" class="label" style="display:none">Tap anywhere to count</div>
+
+    <div id="soundError" class="error-note" style="display:none"></div>
+
+    <div id="soundControls" class="controls-panel" style="display:none">
+      <div class="slider-row">
+        <div class="vals"><span class="label">Sensitivity</span></div>
+        <input type="range" id="sensitivitySlider" min="0" max="1" step="0.01" value="0.5" />
+      </div>
+      <div class="slider-row">
+        <div class="vals"><span class="label">Cooldown</span></div>
+        <input type="range" id="cooldownSlider" min="80" max="600" step="10" value="250" />
+      </div>
+      <button id="btnRecalibrate">Recalibrate</button>
+    </div>
+
+    <div class="controls-panel">
+      <div class="toggle-row">
+        <label for="tickToggle">Tick on count</label>
+        <input type="checkbox" id="tickToggle" />
+      </div>
+      <div class="row">
+        <button id="btnMinus">&minus;1</button>
+        <button id="btnPlus">+1</button>
+        <button id="btnUndo">Undo</button>
+        <button id="btnReset" class="danger">Reset</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="screen-motion-stub" class="screen center-screen">
+    <div class="label">Motion mode</div>
+    <p class="note">Not built yet. MOTION counting (DeviceMotion-based tap detection) is a separate seat's work.</p>
+    <button id="btnMotionBack">Back to Tap</button>
+  </div>
+
+  <div id="screen-calibrate-start" class="screen center-screen">
+    <div class="label">Sound mode — calibration needed</div>
+    <p class="note">Demonstrate the sound to count 3 to 5 times. It learns your bench, your room, your tap.</p>
+    <button class="primary" id="btnCalibrateStart">Start calibration</button>
+  </div>
+
+  <div id="screen-noise" class="screen center-screen">
+    <div class="label">Measuring room noise</div>
+    <p class="note">Stay quiet for a moment.</p>
+    <div class="countdown" id="noiseCountdown">2</div>
+  </div>
+
+  <div id="screen-tap" class="screen center-screen">
+    <div class="label">Demonstrate the sound</div>
+    <p class="note">Same spot, same force, each time. 3 minimum &mdash; keeps listening up to 5.</p>
+    <div class="dots" id="tapDots"></div>
+    <button class="primary" id="btnCalDone" style="display:none" disabled>Done</button>
+  </div>
+
+  <div id="screen-check" class="screen center-screen">
+    <div class="label" id="checkTitle">Checking calibration&hellip;</div>
+    <p class="note" id="checkDetail"></p>
+    <div class="row">
+      <button class="primary" id="btnCheckContinue" style="display:none">Continue</button>
+      <button id="btnCheckRedo" style="display:none">Redo calibration</button>
+    </div>
+  </div>
+
+  <div id="screen-room" class="screen center-screen">
+    <div class="label">Listening to your room</div>
+    <p class="note">5 seconds &mdash; checking for sounds that could be mistaken for your tap.</p>
+    <div class="countdown" id="roomCountdown">5</div>
+  </div>
+
+  <div id="screen-room-report" class="screen center-screen">
+    <div class="label">Room check</div>
+    <p class="note" id="roomReport"></p>
+    <button class="primary" id="btnRoomContinue">Start counting</button>
+  </div>
+
+</div>
+
+<script type="module">
+  import { initApp } from './app.js';
+  initApp();
+</script>
+</body>
+</html>
