@@ -109,7 +109,15 @@ function run(name, seed) {
     // ev.fingerprint on the new detector (multi-frame); fall back for an older copy
     if (ev) examples.push(exampleFrom(ev, frames[i]));
   }
-  if (examples.length < CAL_EXAMPLES) return { name, error: `only captured ${examples.length}/${CAL_EXAMPLES} calibration taps` };
+  // Throws, exactly like the spread guard below — review found the two failure channels
+  // inconsistent: this one used to return {error}, which scoreRoom folded into the table
+  // as a small ERR marker while the surviving seeds still fed the TOTAL. A room where 2
+  // of 5 draws failed to calibrate would quietly publish a better headline number — the
+  // precise class of silent drift this harness exists to kill. Loud beats convenient.
+  if (examples.length < CAL_EXAMPLES) {
+    throw new Error(`${name} seed ${seed}: only captured ${examples.length}/${CAL_EXAMPLES} calibration taps — `
+      + 'the fixture cannot drive the app\'s own calibration flow, so no score from it is comparable.');
+  }
 
   // 3. room check — count matches AND harvest what it rejects as negative examples.
   // An older detector never fires onEvent, so negatives stays empty and it scores as before.
@@ -176,7 +184,6 @@ function score() {
     const per = [];
     for (const seed of SEEDS) {
       const r = run(name, seed);
-      if (r.error) { per.push(`ERR(${r.error})`); continue; }
       m += r.missed; f += r.falsePositives; exp += r.expected;
       per.push(`${r.missed}/${r.falsePositives}`);
     }
@@ -300,7 +307,6 @@ function sweep() {
           let f = 0;
           for (const seed of SEEDS) {
             const r = run(name, seed);
-            if (r.error) continue;
             m += r.missed; f += r.falsePositives;
           }
           M += m; F += f;

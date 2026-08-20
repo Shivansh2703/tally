@@ -106,7 +106,7 @@ every sound it rejected, which is what turns "it miscounted" into something fixa
 npm test
 ```
 
-29 tests, Node's built-in runner, no framework and no dependencies. `detector.js` and `tally.js`
+36 tests, Node's built-in runner, no framework and no dependencies. `detector.js` and `tally.js`
 are pure — no DOM, no Web Audio, no clock — which is what lets the whole thing be tested without
 a microphone.
 
