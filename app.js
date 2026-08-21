@@ -9,6 +9,15 @@ const STORAGE_KEY = 'tally-v1-state';
 const MIN_EXAMPLES = 3;
 const MAX_EXAMPLES = 5;
 
+// Owner ruling 2026-08-21 ~10:5x, verbatim "lower the sensitivity min for tally.
+// Make it min 5x the room": the noise floor from the "Measuring room noise" step
+// is a hard floor on the detection threshold (see detector.js: Math.max(median *
+// multiplier, noiseFloor)) — no sensitivity setting can push the threshold below
+// it. 5x the measured room flux, was 1.5x.
+export function noiseFloorFromRoom(avgFlux) {
+  return avgFlux * 5;
+}
+
 // Owner ruling 2026-08-19 ~18:40: accept after 3 examples, keep listening up
 // to 5. Pure decision so the "Done" affordance and the auto-stop share one
 // rule instead of drifting apart.
@@ -349,7 +358,7 @@ export function initApp() {
       }
       requestAnimationFrame(tick);
     });
-    const noiseFloor = noiseFrames > 0 ? (noiseFluxSum / noiseFrames) * 1.5 : 0;
+    const noiseFloor = noiseFrames > 0 ? noiseFloorFromRoom(noiseFluxSum / noiseFrames) : 0;
 
     // 2. tap 3-5 times
     showScreen('screen-tap');

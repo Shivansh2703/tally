@@ -1,7 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { calibrationStep, micNeedsReacquire, micNeedsResume, isValidCalibration } from './app.js';
+import { calibrationStep, micNeedsReacquire, micNeedsResume, isValidCalibration, noiseFloorFromRoom } from './app.js';
 import { FINGERPRINT_DIM } from './detector.js';
+
+// Owner ruling 2026-08-21: "lower the sensitivity min for tally. Make it min 5x the room."
+test('noiseFloorFromRoom: the detection floor is 5x the measured room level', () => {
+  assert.equal(noiseFloorFromRoom(10), 50);
+  assert.equal(noiseFloorFromRoom(0), 0);
+});
 
 test('calibrationStep: fewer than 3 examples never finishes, Done not offered', () => {
   for (const n of [0, 1, 2]) {
