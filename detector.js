@@ -239,7 +239,7 @@ export function createDetector({
       // pushes its own ceiling up and self-rejects.
       fluxBuffer.push(flux);
       if (fluxBuffer.length > FLUX_BUFFER_SIZE) fluxBuffer.shift();
-      const multiplier = 3.5 - 3 * curSensitivity; // higher sensitivity -> lower bar
+      const multiplier = 5 - 4.5 * curSensitivity; // higher sensitivity -> lower bar
       const threshold = Math.max(median(fluxBuffer) * multiplier, noiseFloor);
       detector.threshold = threshold;
 

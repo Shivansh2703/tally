@@ -3,9 +3,8 @@ import assert from 'node:assert/strict';
 import { calibrationStep, micNeedsReacquire, micNeedsResume, isValidCalibration, noiseFloorFromRoom } from './app.js';
 import { FINGERPRINT_DIM } from './detector.js';
 
-// Owner ruling 2026-08-21: "lower the sensitivity min for tally. Make it min 5x the room."
-test('noiseFloorFromRoom: the detection floor is 5x the measured room level', () => {
-  assert.equal(noiseFloorFromRoom(10), 50);
+test('noiseFloorFromRoom: the detection floor is 1.5x the measured room level', () => {
+  assert.equal(noiseFloorFromRoom(10), 15);
   assert.equal(noiseFloorFromRoom(0), 0);
 });
 
@@ -95,8 +94,8 @@ test('isValidCalibration: malformed shapes are rejected, not thrown on', () => {
 import { sensitivityLabel, cooldownLabel, pickBuiltInMic } from './app.js';
 
 test('sensitivityLabel renders the percentage and the real flux multiplier', () => {
-  assert.equal(sensitivityLabel(0.5), '50% · bar 2.0× room');
-  assert.equal(sensitivityLabel(0), '0% · bar 3.5× room');
+  assert.equal(sensitivityLabel(0.5), '50% · bar 2.8× room');
+  assert.equal(sensitivityLabel(0), '0% · bar 5.0× room');
   assert.equal(sensitivityLabel(1), '100% · bar 0.5× room');
 });
 

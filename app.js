@@ -9,13 +9,11 @@ const STORAGE_KEY = 'tally-v1-state';
 const MIN_EXAMPLES = 3;
 const MAX_EXAMPLES = 5;
 
-// Owner ruling 2026-08-21 ~10:5x, verbatim "lower the sensitivity min for tally.
-// Make it min 5x the room": the noise floor from the "Measuring room noise" step
-// is a hard floor on the detection threshold (see detector.js: Math.max(median *
-// multiplier, noiseFloor)) — no sensitivity setting can push the threshold below
-// it. 5x the measured room flux, was 1.5x.
+// Hard floor on the detection threshold from the "Measuring room noise" step
+// (see detector.js: Math.max(median * multiplier, noiseFloor)) — no
+// sensitivity setting can push the threshold below it.
 export function noiseFloorFromRoom(avgFlux) {
-  return avgFlux * 5;
+  return avgFlux * 1.5;
 }
 
 // Owner ruling 2026-08-19 ~18:40: accept after 3 examples, keep listening up
@@ -44,10 +42,10 @@ export function micNeedsResume(audioCtxState) {
 // Slider scales. The app asked people to move sliders it never explained; the owner had
 // to ask what they do. These render the honest mechanics, not marketing words.
 // Sensitivity drives ONLY the "was that a sound at all?" bar (see detector.js: the flux
-// threshold is median * (3.5 - 3*s)); it never touches matching. Cooldown is the minimum
+// threshold is median * (5 - 4.5*s)); it never touches matching. Cooldown is the minimum
 // gap between counts, which caps the counting rate.
 export function sensitivityLabel(s) {
-  const mult = 3.5 - 3 * s; // keep in step with detector.js's multiplier line
+  const mult = 5 - 4.5 * s; // keep in step with detector.js's multiplier line
   return `${Math.round(s * 100)}% · bar ${mult.toFixed(1)}× room`;
 }
 export function cooldownLabel(ms) {
