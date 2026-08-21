@@ -184,7 +184,7 @@ export function createDetector({
   negatives = [],
   noiseFloor = 0,
   sensitivity = 0.5,
-  strictness = 0.5,
+  strictness = 0,
   refractoryMs = 120,
   onEvent = null,
 }) {

@@ -92,7 +92,7 @@ function defaultState() {
     history: [],
     mode: 'tap',
     settings: {
-      sound: { sensitivity: 0.5, strictness: 0.5, cooldownMs: 250, tick: false, debug: false },
+      sound: { sensitivity: 0.5, strictness: 0, cooldownMs: 250, tick: false, debug: false },
       tap: { tick: false },
     },
     calibration: null,
@@ -123,7 +123,12 @@ function loadState() {
     const state = {
       ...d,
       ...saved,
-      settings: { ...d.settings, ...(saved.settings || {}) },
+      settings: {
+        ...d.settings,
+        ...(saved.settings || {}),
+        sound: { ...d.settings.sound, ...(saved.settings && saved.settings.sound) },
+        tap: { ...d.settings.tap, ...(saved.settings && saved.settings.tap) },
+      },
     };
     if (state.calibration && !isValidCalibration(state.calibration)) state.calibration = null;
     return state;
