@@ -48,6 +48,13 @@ export function sensitivityLabel(s) {
   const mult = 5 - 4.5 * s; // keep in step with detector.js's multiplier line
   return `${Math.round(s * 100)}% · bar ${mult.toFixed(1)}× room`;
 }
+// Strictness scales the calibrated match TOLERANCE (see detector.js's effectiveThreshold
+// line): 1.0x at 0 (today's fixed behaviour), 0.75x at the 0.5 default (owner: "tighten
+// it"), 0.5x at 1. Never touches the sensitivity bar above.
+export function strictnessLabel(s) {
+  const mult = 1 - 0.5 * s; // keep in step with detector.js's effectiveThreshold line
+  return `${Math.round(s * 100)}% · match ${mult.toFixed(2)}× calibrated`;
+}
 export function cooldownLabel(ms) {
   const perSec = Math.round((1000 / ms) * 10) / 10;
   return `${ms} ms · max ${perSec}/s`;
@@ -85,7 +92,7 @@ function defaultState() {
     history: [],
     mode: 'tap',
     settings: {
-      sound: { sensitivity: 0.5, cooldownMs: 250, tick: false, debug: false },
+      sound: { sensitivity: 0.5, strictness: 0.5, cooldownMs: 250, tick: false, debug: false },
       tap: { tick: false },
     },
     calibration: null,
@@ -491,19 +498,28 @@ export function initApp() {
       negatives: cal.negatives || [],
       noiseFloor: state.noiseFloor,
       sensitivity: soundSettings.sensitivity,
+      strictness: soundSettings.strictness,
       refractoryMs: soundSettings.cooldownMs,
       onEvent: (ev) => { if (soundSettings.debug) record(ev); },
     });
     $('sensitivitySlider').value = soundSettings.sensitivity;
+    $('strictnessSlider').value = soundSettings.strictness;
     $('cooldownSlider').value = soundSettings.cooldownMs;
     const paintSliderLabels = () => {
       $('sensVal').textContent = sensitivityLabel(soundSettings.sensitivity);
+      $('strictVal').textContent = strictnessLabel(soundSettings.strictness);
       $('cooldownVal').textContent = cooldownLabel(soundSettings.cooldownMs);
     };
     paintSliderLabels();
     $('sensitivitySlider').oninput = (e) => {
       soundSettings.sensitivity = parseFloat(e.target.value);
       detector.setSensitivity(soundSettings.sensitivity);
+      paintSliderLabels();
+      persist();
+    };
+    $('strictnessSlider').oninput = (e) => {
+      soundSettings.strictness = parseFloat(e.target.value);
+      detector.setStrictness(soundSettings.strictness);
       paintSliderLabels();
       persist();
     };
@@ -575,6 +591,7 @@ export function initApp() {
       micLabel: micTrack?.label || 'unknown',
       noiseFloor: state.noiseFloor,
       sensitivity: state.settings.sound.sensitivity,
+      strictness: state.settings.sound.strictness,
       cooldownMs: state.settings.sound.cooldownMs,
       negatives: cal.negatives || [],
       events: capture,

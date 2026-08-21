@@ -530,3 +530,56 @@ test('cosineDistance throws on a length mismatch instead of returning NaN or a p
   assert.throws(() => cosineDistance(long, short), /length mismatch/);
   assert.throws(() => cosineDistance(short, long), /length mismatch/);
 });
+
+test('strictness scales the calibrated matchThreshold: a sound just under it matches at 0, is rejected at 0.5', () => {
+  // Owner ruling 2026-08-21: "tighten it and add it as a slider." Build a probe whose
+  // distance from the centroid is known (measured with an always-match detector), then
+  // pick a matchThreshold that puts it inside the (0.75x, 1.0x] window strictness carves
+  // out — matches with today's behaviour (strictness 0, 1.0x), rejected at the new 0.5
+  // default (0.75x).
+  const { centroid } = calibrateFromShape(tapSpectrum);
+
+  let measuredDistance = null;
+  const probe = createDetector({
+    centroid, matchThreshold: 2, noiseFloor: 0, sensitivity: 0.5, refractoryMs: 0,
+    onEvent: (ev) => { measuredDistance = ev.distance; },
+  });
+  let t = warmUp(probe);
+  feedImpulse(probe, clankSpectrum, 1, t);
+  assert.ok(measuredDistance > 0, 'probe must have measured a real distance');
+
+  // threshold chosen so measuredDistance sits at ~0.85x of it: inside (0.75x, 1.0x].
+  const matchThreshold = measuredDistance / 0.85;
+
+  const loose = createDetector({ centroid, matchThreshold, strictness: 0, noiseFloor: 0, sensitivity: 0.5, refractoryMs: 0 });
+  t = warmUp(loose);
+  const { counted: countedLoose } = feedImpulse(loose, clankSpectrum, 1, t);
+  assert.equal(countedLoose, 1, 'strictness 0 keeps today’s tolerance — this must still match');
+
+  const tight = createDetector({ centroid, matchThreshold, strictness: 0.5, noiseFloor: 0, sensitivity: 0.5, refractoryMs: 0 });
+  t = warmUp(tight);
+  const { counted: countedTight } = feedImpulse(tight, clankSpectrum, 1, t);
+  assert.equal(countedTight, 0, 'strictness 0.5 tightens the tolerance to 0.75x — this must now be rejected');
+});
+
+test('setStrictness updates tolerance live, same as setSensitivity updates the bar live', () => {
+  const { centroid } = calibrateFromShape(tapSpectrum);
+  let measuredDistance = null;
+  const probe = createDetector({
+    centroid, matchThreshold: 2, noiseFloor: 0, sensitivity: 0.5, refractoryMs: 0,
+    onEvent: (ev) => { measuredDistance = ev.distance; },
+  });
+  let t = warmUp(probe);
+  feedImpulse(probe, clankSpectrum, 1, t);
+  const matchThreshold = measuredDistance / 0.85;
+
+  const detector = createDetector({ centroid, matchThreshold, strictness: 0, noiseFloor: 0, sensitivity: 0.5, refractoryMs: 0 });
+  t = warmUp(detector);
+  const before = feedImpulse(detector, clankSpectrum, 1, t);
+  assert.equal(before.counted, 1, 'still loose before the call');
+
+  detector.setStrictness(0.5);
+  t = before.t + 300;
+  const after = feedImpulse(detector, clankSpectrum, 1, t);
+  assert.equal(after.counted, 0, 'tightened after setStrictness(0.5)');
+});

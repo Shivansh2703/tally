@@ -184,6 +184,7 @@ export function createDetector({
   negatives = [],
   noiseFloor = 0,
   sensitivity = 0.5,
+  strictness = 0.5,
   refractoryMs = 120,
   onEvent = null,
 }) {
@@ -191,6 +192,7 @@ export function createDetector({
   const fluxBuffer = [];
   let lastCountedT = -Infinity;
   let curSensitivity = sensitivity;
+  let curStrictness = strictness;
   let curRefractoryMs = refractoryMs;
   // An onset waiting on its own decay before it can be judged.
   let pending = null;
@@ -205,7 +207,12 @@ export function createDetector({
     let matched = true;
     if (centroid) {
       distance = cosineDistance(fp, centroid);
-      matched = distance <= matchThreshold;
+      // Strictness scales the CALIBRATED threshold, linearly: 1.0x at 0 (today's
+      // behaviour), 0.75x at the 0.5 default (the "tighten" the owner asked for),
+      // 0.5x at 1. Does not touch the negatives check below, which compares
+      // against `distance`, not the threshold.
+      const effectiveThreshold = matchThreshold * (1 - 0.5 * curStrictness);
+      matched = distance <= effectiveThreshold;
       // Closer to something we were told to ignore than to the thing we count.
       if (matched && negatives.length) {
         matched = !negatives.some((neg) => cosineDistance(fp, neg) < distance - NEGATIVE_DOMINANCE);
@@ -280,6 +287,10 @@ export function createDetector({
 
     setSensitivity(x) {
       curSensitivity = x;
+    },
+
+    setStrictness(x) {
+      curStrictness = x;
     },
 
     setRefractory(ms) {

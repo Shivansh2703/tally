@@ -91,12 +91,18 @@ test('isValidCalibration: malformed shapes are rejected, not thrown on', () => {
 
 // --- slider scales + mic routing (2026-08-20 second batch) ------------------
 
-import { sensitivityLabel, cooldownLabel, pickBuiltInMic } from './app.js';
+import { sensitivityLabel, strictnessLabel, cooldownLabel, pickBuiltInMic } from './app.js';
 
 test('sensitivityLabel renders the percentage and the real flux multiplier', () => {
   assert.equal(sensitivityLabel(0.5), '50% · bar 2.8× room');
   assert.equal(sensitivityLabel(0), '0% · bar 5.0× room');
   assert.equal(sensitivityLabel(1), '100% · bar 0.5× room');
+});
+
+test('strictnessLabel renders the percentage and the real match-tolerance multiplier', () => {
+  assert.equal(strictnessLabel(0), '0% · match 1.00× calibrated');
+  assert.equal(strictnessLabel(0.5), '50% · match 0.75× calibrated');
+  assert.equal(strictnessLabel(1), '100% · match 0.50× calibrated');
 });
 
 test('cooldownLabel renders ms and the counting-rate ceiling it implies', () => {
